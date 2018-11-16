@@ -119,8 +119,7 @@ class ImageScannerPlugin(val registrar: Registrar) : MethodCallHandler {
     }
 
 }
-
-data class Img(val path: String, val imgId: String, val dir: String, val dirId: String, val title: String, var thumb: String?, val type: AssetType)
+data class Img(val path: String, val imgId: String, val dir: String, val dirId: String, val title: String, var thumb: String?,var imgDate:String,var latitude:String ,var longitude:String,var imgH:String,var imgW:String,val type: AssetType)
 
 enum class AssetType {
     Other,
