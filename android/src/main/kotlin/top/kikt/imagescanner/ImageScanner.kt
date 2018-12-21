@@ -68,7 +68,7 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
         Log.i("K", "num = $num")
         if(num > 0){
             mCursor.moveToLast()
-            while (mCursor.moveToPrevious()) {
+            do {
                 val path = mCursor.getString(mCursor
                         .getColumnIndex(MediaStore.Images.Media.DATA))
                 val dir = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME))
@@ -77,8 +77,8 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
                 val thumb = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.MINI_THUMB_MAGIC))
                 val imgId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns._ID))
                 val imgDate = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.DATE_TAKEN))
-    //             var latitude = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.LATITUDE))
-    //             var longitude = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.LONGITUDE))
+                var latitude = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.LATITUDE))
+                var longitude = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.LONGITUDE))
                 var imgH = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.HEIGHT))
                 var imgW = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.WIDTH))
                 val img = Img(path, imgId, dir, dirId, title, thumb,imgDate,imgH,imgW, AssetType.Image)
@@ -94,7 +94,7 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
                 pathIdMap[dir] = dirId
 
                 pathImgMap[path] = img
-            }
+            } while (mCursor.moveToPrevious())
             mCursor.close()
         }
     }
