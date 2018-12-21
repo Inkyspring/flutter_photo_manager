@@ -3,6 +3,7 @@ package top.kikt.imagescanner
 import android.os.Handler
 import android.provider.MediaStore
 import android.util.Log
+import android.database.Cursor
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
@@ -57,40 +58,43 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
         pathIdMap.clear()
 
         scanImage()
-        scanVideo()
+//        scanVideo()
     }
 
     private fun scanImage() {
         val mImageUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val mContentResolver = registrar.activity().contentResolver
-        val mCursor = MediaStore.Images.Media.query(mContentResolver, mImageUri, STORE_IMAGES, null, MediaStore.Images.Media.DATE_TAKEN)
-        val num = mCursor.count
-        Log.i("K", "num = $num")
-        if(num > 0){
-            mCursor.moveToLast()
-            do {
-                val path = mCursor.getString(mCursor
-                        .getColumnIndex(MediaStore.Images.Media.DATA))
-                val dir = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME))
-                val dirId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.BUCKET_ID))
-                val title = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.TITLE))
-                val thumb = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.MINI_THUMB_MAGIC))
-                val imgId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns._ID))
-                val img = Img(path, imgId, dir, dirId, title, thumb, AssetType.Image)
+        try {
+            val mCursor = MediaStore.Images.Media.query(mContentResolver, mImageUri, STORE_IMAGES, null, MediaStore.Images.Media.DATE_TAKEN)
+            val num = mCursor.count
+            if(num > 0){
+                mCursor.moveToLast()
+                do {
+                    val path = mCursor.getString(mCursor.
+                            getColumnIndex(MediaStore.Images.Media.DATA))
+                    val dir = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME))
+                    val dirId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.BUCKET_ID))
+                    val title = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.TITLE))
+                    val thumb = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.MINI_THUMB_MAGIC))
+                    val imgId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns._ID))
+                    val img = Img(path, imgId, dir, dirId, title, thumb, AssetType.Image)
 
-                val file = File(path)
-                if (file.exists().not()) {
-                    continue
-                }
+                    val file = File(path)
+                    if (file.exists().not()) {
+                        continue
+                    }
 
-                imgList.add(img)
+                    imgList.add(img)
 
-                idPathMap[dirId] = dir
-                pathIdMap[dir] = dirId
+                    idPathMap[dirId] = dir
+                    pathIdMap[dir] = dirId
 
-                pathImgMap[path] = img
-            } while (mCursor.moveToPrevious())
-            mCursor.close()
+                    pathImgMap[path] = img
+                } while (mCursor.moveToPrevious())
+                mCursor.close()
+            }
+        } catch (e: Exception) {
+
         }
     }
 
@@ -386,5 +390,4 @@ class ImageCallBack(val imgList: List<Img>, val thumbHelper: ThumbHelper) : Call
         }
         return true
     }
-
 }
