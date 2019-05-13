@@ -4,7 +4,6 @@ import android.database.Cursor
 import android.os.Handler
 import android.provider.MediaStore
 import android.util.Log
-import android.database.Cursor
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
