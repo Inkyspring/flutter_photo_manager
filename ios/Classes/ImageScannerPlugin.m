@@ -1,5 +1,6 @@
 #import "ImageScannerPlugin.h"
 #import "Reply.h"
+#import "PhotoChangeObserver.h"
 
 @implementation ImageScannerPlugin {
 }
@@ -11,9 +12,10 @@
     [registrar addMethodCallDelegate:instance channel:channel];
 
     instance.scanner = [[ImageScanner alloc] init];
-    
-    NSString *path = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES) objectAtIndex:0];
-    NSLog(@"沙盒目录 = %@",path);
+    instance.scanner.registrar = registrar;
+
+    NSString *path = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    NSLog(@"application path = %@", path);
     
     instance.registrar = registrar;
 }
@@ -34,7 +36,7 @@
     } else if ([@"getImageListWithPathId" isEqualToString:call.method]) {
         [_scanner getImageListWithCall:call result:result];
     } else if ([@"getAllImageList" isEqualToString:call.method]) {
-        [_scanner getAllImageListWithCall:call result:result];
+        [_scanner forEachAssetCollection:call result:result];
     } else if ([@"getThumbPath" isEqualToString:call.method]) {
         [_scanner getThumbPathWithCall:call result:result];
     } else if ([@"getThumbBytesWithId" isEqualToString:call.method]) {
@@ -47,6 +49,30 @@
         [_scanner getAssetTypeByIdsWithCall:call result:result];
     } else if([@"isCloudWithImageId" isEqualToString:call.method]){
         [_scanner isCloudWithCall:call result:result];
+    } else if([@"getDurationWithId" isEqualToString:call.method]){
+        [_scanner getDurationWithId:call result:result];
+    } else if([@"getSizeWithId" isEqualToString:call.method]){
+        [_scanner getSizeWithId:call result:result];
+    } else if([@"releaseMemCache" isEqualToString:call.method]){
+        [_scanner releaseMemCache:call result:result];
+    } else if ([@"getVideoPathList" isEqualToString:call.method]) {
+        [_scanner getVideoPathList:call result:result];
+    } else if ([@"getImagePathList" isEqualToString:call.method]) {
+        [_scanner getImagePathList:call result:result];
+    } else if ([@"getAllVideo" isEqualToString:call.method]) {
+        [_scanner getAllVideo:call result:result];
+    } else if ([@"getOnlyVideoWithPathId" isEqualToString:call.method]) {
+        [_scanner getOnlyVideoWithPathId:call result:result];
+    } else if ([@"getAllImage" isEqualToString:call.method]) {
+        [_scanner getAllImage:call result:result];
+    } else if ([@"getOnlyImageWithPathId" isEqualToString:call.method]) {
+        [_scanner getOnlyImageWithPathId:call result:result];
+    } else if ([@"createAssetWithId" isEqualToString:call.method]) {
+        [_scanner createAssetWithIdWithCall:call result:result];
+    } else if ([@"getTimeStampWithIds" isEqualToString:call.method]) {
+        [_scanner getTimeStampWithIdsWithCall:call result:result];
+    }else if ([@"assetExistsWithId" isEqualToString:call.method]) {
+        [_scanner assetExistsWithId:call result:result];
     } else {
         result(FlutterMethodNotImplemented);
     }

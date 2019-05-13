@@ -1,5 +1,6 @@
 package top.kikt.imagescanner
 
+import android.database.Cursor
 import android.os.Handler
 import android.provider.MediaStore
 import android.util.Log
@@ -7,6 +8,7 @@ import android.database.Cursor
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
+import top.kikt.imagescanner.ImageScanner.Companion.threadPool
 import top.kikt.imagescanner.thumb.ThumbnailUtil
 import java.io.File
 import java.util.concurrent.*
@@ -18,14 +20,14 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
         private const val poolSize = 8
         private val thumbPool = ThreadPoolExecutor(poolSize, 1000, 200, TimeUnit.MINUTES, ArrayBlockingQueue<Runnable>(5))
 
-        private val threadPool: ThreadPoolExecutor = ThreadPoolExecutor(poolSize + 3, 1000, 200, TimeUnit.MINUTES, ArrayBlockingQueue<Runnable>(poolSize + 3))
+        internal val threadPool: ThreadPoolExecutor = ThreadPoolExecutor(poolSize + 3, 1000, 200, TimeUnit.MINUTES, ArrayBlockingQueue<Runnable>(poolSize + 3))
 
         var handler: Handler = Handler()
     }
 
-    val thumbHelper = ThumbHelper(registrar)
+    private val thumbHelper = ThumbHelper(registrar)
 
-    private val STORE_IMAGES = arrayOf(MediaStore.Images.Media.DISPLAY_NAME, // 显示的名字
+    private val storeImageKeys = arrayOf(MediaStore.Images.Media.DISPLAY_NAME, // 显示的名字
             MediaStore.Images.Media.DATA, // 数据
             MediaStore.Images.Media.LONGITUDE, // 经度
             MediaStore.Images.Media._ID, // id
@@ -33,11 +35,13 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
             MediaStore.Images.Media.TITLE, // id
             MediaStore.Images.Media.BUCKET_ID, // dir id 目录
             MediaStore.Images.Media.BUCKET_DISPLAY_NAME, // dir name 目录名字
-            MediaStore.Images.Media.DATE_TAKEN
+            MediaStore.Images.Media.WIDTH, // 宽
+            MediaStore.Images.Media.HEIGHT, // 高
+            MediaStore.Images.Media.DATE_TAKEN //日期
     )
 
 
-    private val STORE_VIDEO = arrayOf(MediaStore.Video.Media.DISPLAY_NAME, // 显示的名字
+    private val storeVideoKeys = arrayOf(MediaStore.Video.Media.DISPLAY_NAME, // 显示的名字
             MediaStore.Video.Media.DATA, // 数据
             MediaStore.Video.Media.LONGITUDE, // 经度
             MediaStore.Video.Media._ID, // id
@@ -45,11 +49,25 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
             MediaStore.Video.Media.TITLE, // id
             MediaStore.Video.Media.BUCKET_ID, // dir id 目录
             MediaStore.Video.Media.BUCKET_DISPLAY_NAME, // dir name 目录名字
-            MediaStore.Video.Media.DATE_TAKEN
+            MediaStore.Video.Media.DATE_TAKEN, //日期
+            MediaStore.Video.Media.WIDTH, // 宽
+            MediaStore.Video.Media.HEIGHT, // 高
+            MediaStore.Video.Media.DURATION //时长
     )
 
 
-    var imgList = ArrayList<Img>()
+    private var imgList = ArrayList<Asset>()
+    /// dirId,AssetList
+    private val map = HashMap<String, ArrayList<Asset>>()
+    private val idPathMap = HashMap<String, String>()
+    private val pathIdMap = HashMap<String, String>()
+    private var thumbMap = HashMap<String, String>()
+    private val pathAssetMap = HashMap<String, Asset>()
+
+    /// dirId,AssetList
+    internal val videoPathDirIdMap = HashMap<String, ArrayList<Asset>>()
+    /// dirId,AssetList
+    internal val imagePathDirIdMap = HashMap<String, ArrayList<Asset>>()
 
     private fun scan() {
         Log.i("K", "start scan")
@@ -64,90 +82,128 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
     private fun scanImage() {
         val mImageUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val mContentResolver = registrar.activity().contentResolver
-        try {
-            val mCursor = MediaStore.Images.Media.query(mContentResolver, mImageUri, STORE_IMAGES, null, MediaStore.Images.Media.DATE_TAKEN)
-            val num = mCursor.count
-            if(num > 0){
-                mCursor.moveToLast()
-                do {
-                    val path = mCursor.getString(mCursor.
-                            getColumnIndex(MediaStore.Images.Media.DATA))
-                    val dir = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME))
-                    val dirId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.BUCKET_ID))
-                    val title = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.TITLE))
-                    val thumb = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.MINI_THUMB_MAGIC))
-                    val imgId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns._ID))
-                    val img = Img(path, imgId, dir, dirId, title, thumb, AssetType.Image)
+        val mCursor = MediaStore.Images.Media.query(mContentResolver, mImageUri, storeImageKeys, null, MediaStore.Images.Media.DATE_TAKEN)
+        val num = mCursor.count
+        Log.i("K", "num = $num")
 
-                    val file = File(path)
-                    if (file.exists().not()) {
-                        continue
-                    }
-
-                    imgList.add(img)
-
-                    idPathMap[dirId] = dir
-                    pathIdMap[dir] = dirId
-
-                    pathImgMap[path] = img
-                } while (mCursor.moveToPrevious())
-                mCursor.close()
-            }
-        } catch (e: Exception) {
-
+        if (num == 0) {
+            mCursor.close()
+            return
         }
+
+        mCursor.moveToLast()
+        do {
+            handleImageCursor(mCursor)
+        } while (mCursor.moveToPrevious())
+        mCursor.close()
+    }
+
+    private fun handleImageCursor(mCursor: Cursor) {
+        val path = mCursor.getString(mCursor
+                .getColumnIndex(MediaStore.Images.Media.DATA))
+        val dir = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME))
+        val dirId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.BUCKET_ID))
+        val title = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.TITLE))
+        val thumb = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.MINI_THUMB_MAGIC))
+        val imgId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Images.ImageColumns._ID))
+        val date = mCursor.getLong(mCursor.getColumnIndex(MediaStore.Images.ImageColumns.DATE_TAKEN))
+        val width = mCursor.getInt(mCursor.getColumnIndex(MediaStore.Images.Media.WIDTH))
+        val height = mCursor.getInt(mCursor.getColumnIndex(MediaStore.Images.Media.HEIGHT))
+
+        if (width <= 0 || height <= 0) {
+            return
+        }
+
+        val img = Asset(path, imgId, dir, dirId, title, thumb, AssetType.Image, date, null, width, height)
+
+        val file = File(path)
+        if (file.exists().not()) {
+            return
+        }
+
+        if (imgList.contains(img).not()) {
+            imgList.add(img)
+        }
+
+        idPathMap[dirId] = dir
+        pathIdMap[dir] = dirId
+
+        pathAssetMap[path] = img
+
+        createImagePath(dirId, dir)
     }
 
     private fun scanVideo() {
         val mImageUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         val mContentResolver = registrar.activity().contentResolver
 
-
-        val mCursor = MediaStore.Images.Media.query(mContentResolver, mImageUri, STORE_VIDEO, null, MediaStore.Images.Media.DATE_TAKEN)
+        val mCursor = MediaStore.Images.Media.query(mContentResolver, mImageUri, storeVideoKeys, null, MediaStore.Images.Media.DATE_TAKEN)
         val num = mCursor.count
         Log.i("K", "num = $num")
-        mCursor.moveToLast()
-        while (mCursor.moveToPrevious()) {
-            val path = mCursor.getString(mCursor
-                    .getColumnIndex(MediaStore.Video.Media.DATA))
-            val dir = mCursor.getString(mCursor.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME))
-            val dirId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Video.Media.BUCKET_ID))
-            val title = mCursor.getString(mCursor.getColumnIndex(MediaStore.Video.Media.TITLE))
-            val thumb = mCursor.getString(mCursor.getColumnIndex(MediaStore.Video.Media.MINI_THUMB_MAGIC))
-            val imgId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Video.Media._ID))
-            val img = Img(path, imgId, dir, dirId, title, thumb, AssetType.Video)
 
-            val file = File(path)
-            if (file.exists().not()) {
-                continue
-            }
-
-            imgList.add(img)
-
-            idPathMap[dirId] = dir
-            pathIdMap[dir] = dirId
-
-            pathImgMap[path] = img
+        if (num == 0) {
+            mCursor.close()
+            return
         }
+
+        mCursor.moveToLast()
+        do {
+            handleVideoCursor(mCursor)
+        } while (mCursor.moveToPrevious())
         mCursor.close()
     }
 
-    fun scanAndGetImageIdList(result: MethodChannel.Result?) {
+    private fun handleVideoCursor(mCursor: Cursor) {
+        val path = mCursor.getString(mCursor
+                .getColumnIndex(MediaStore.Video.Media.DATA))
+        val dir = mCursor.getString(mCursor.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME))
+        val dirId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Video.Media.BUCKET_ID))
+        val title = mCursor.getString(mCursor.getColumnIndex(MediaStore.Video.Media.TITLE))
+        val thumb = mCursor.getString(mCursor.getColumnIndex(MediaStore.Video.Media.MINI_THUMB_MAGIC))
+        val imgId = mCursor.getString(mCursor.getColumnIndex(MediaStore.Video.Media._ID))
+        val date = mCursor.getLong(mCursor.getColumnIndex(MediaStore.Video.Media.DATE_TAKEN))
+        val durationMs = mCursor.getLong(mCursor.getColumnIndex(MediaStore.Video.Media.DURATION))
+
+        val width = mCursor.getInt(mCursor.getColumnIndex(MediaStore.Video.Media.WIDTH))
+        val height = mCursor.getInt(mCursor.getColumnIndex(MediaStore.Video.Media.HEIGHT))
+
+        val img = Asset(path, imgId, dir, dirId, title, thumb, AssetType.Video, date, durationMs, width, height)
+
+        if (width <= 0 || height <= 0) {
+            return
+        }
+
+        val file = File(path)
+        if (file.exists().not()) {
+            return
+        }
+
+        if (imgList.contains(img).not()) {
+            imgList.add(img)
+        }
+
+        idPathMap[dirId] = dir
+        pathIdMap[dir] = dirId
+
+        pathAssetMap[path] = img
+
+        createVideoPath(dirId, dir)
+    }
+
+    fun scanAndGetImageIdList(call: MethodCall, result: MethodChannel.Result?) {
         threadPool.execute {
+            if (call.arguments()) {
+                result?.success(map.keys.toList())
+                return@execute
+            }
             scan()
             scanThumb()
-            split()
+            filter()
             result?.success(map.keys.toList())
         }
     }
 
-    /// dirId,ImgList
-    val map = HashMap<String, ArrayList<Img>>()
-
-    val idPathMap = HashMap<String, String>()
-    val pathIdMap = HashMap<String, String>()
-
-    private fun split() {
+    private fun filter() {
         map.clear()
         imgList.forEach {
             var list = map[it.dirId]
@@ -214,8 +270,8 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
         }
     }
 
-    private fun refreshThumb(imgList: List<Img>): Future<Boolean> {
-        val count = imgList.count()
+    private fun refreshThumb(assetList: List<Asset>): Future<Boolean> {
+        val count = assetList.count()
 
 
         if (count >= poolSize) {
@@ -225,7 +281,7 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
                 val start = i * per
                 val end = if (i == poolSize - 1) count - 1 else (i + 1) * per
                 Log.i("img_count", "max = $count , start = $start , end = $end")
-                val subList = imgList.subList(start, end)
+                val subList = assetList.subList(start, end)
                 val futureTask = FutureTask(ImageCallBack(subList, thumbHelper))
                 futureList.add(futureTask)
                 thumbPool.execute(futureTask)
@@ -243,7 +299,7 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
             return future
         } else {
             val future: FutureTask<Boolean> = FutureTask(Callable {
-                imgList.forEachIndexed { index, img ->
+                assetList.forEachIndexed { index, img ->
                     val thumb = thumbHelper.getThumb(img.path, img.imgId)
                     Log.i("image_thumb", "make thumb = $thumb ,progress = ${index + 1} / $count")
                 }
@@ -294,8 +350,6 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
         }
     }
 
-    var thumbMap = HashMap<String, String>()
-
     private fun scanThumb() {
         val mImageUri = MediaStore.Images.Thumbnails.EXTERNAL_CONTENT_URI
         val mContentResolver = registrar.activity().contentResolver
@@ -315,19 +369,17 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
         val path = call.arguments as String
     }
 
-    val pathImgMap = HashMap<String, Img>()
-
-    private fun getThumbFromPath(img: Img?): String? {
-        if (img == null) {
+    private fun getThumbFromPath(asset: Asset?): String? {
+        if (asset == null) {
             return null
         }
-        return thumbMap[img.imgId]
+        return thumbMap[asset.imgId]
     }
 
     fun getImageThumb(call: MethodCall, result: MethodChannel.Result) {
         threadPool.execute {
             val path = call.arguments as String
-            val img = pathImgMap[path]
+            val img = getImageWithId(path)
             if (img == null) {
                 result.success(null)
             } else {
@@ -347,7 +399,13 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
 
         val args = call.arguments as List<Any>
         val id = args[0] as String
-        val img = pathImgMap[id] ?: return
+        val imageWithId = getImageWithId(id)
+        val img = if (imageWithId != null) {
+            imageWithId
+        } else {
+            result.success(null)
+            return
+        }
         val width = (args[1] as String).toInt()
         val height = (args[2] as String).toInt()
 
@@ -365,7 +423,7 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
         val resultList = ArrayList<String>()
 
         idList.forEach { id ->
-            val img = pathImgMap[id]
+            val img = getImageWithId(id)
             img?.apply {
                 resultList.add(typeFromEntity(this))
             }
@@ -373,20 +431,229 @@ class ImageScanner(val registrar: PluginRegistry.Registrar) {
         result.success(resultList)
     }
 
-    private fun typeFromEntity(img: Img): String {
-        return when (img.type) {
+    private fun typeFromEntity(asset: Asset): String {
+        return when (asset.type) {
             AssetType.Image -> "1"
             AssetType.Video -> "2"
             AssetType.Other -> "0"
         }
     }
+
+    fun getAssetDurationWithId(call: MethodCall, result: MethodChannel.Result) {
+        val id = call.arguments<String>()
+        val img = getImageWithId(id)
+        if (img == null || img.type != AssetType.Video) {
+            result.success(null)
+        } else {
+            val duration = img.duration
+            if (duration == null) {
+                result.success(null)
+            } else {
+                result.success(duration / 1000)
+            }
+        }
+    }
+
+    /**
+     * [id] id image path
+     *
+     * id system data is [MediaStore.Images.ImageColumns.DATA] or [MediaStore.Video.VideoColumns.DATA]
+     */
+    fun getImageWithId(id: String) = pathAssetMap[id]
+
+    fun getSizeWithId(call: MethodCall, result: MethodChannel.Result) {
+        val id = call.arguments<String>()
+        val img = getImageWithId(id)
+        if (img == null) {
+            result.success(mapOf<String, Int>())
+            return
+        }
+        val sizeMap = mapOf(
+                "width" to img.width,
+                "height" to img.height
+        )
+        result.success(sizeMap)
+    }
+
+    fun releaseMemCache(result: MethodChannel.Result) {
+        imgList.clear()
+        idPathMap.clear()
+        pathIdMap.clear()
+        pathAssetMap.clear()
+        map.clear()
+        thumbMap.clear()
+        videoPathDirIdMap.clear()
+        imagePathDirIdMap.clear()
+
+        result.success(1)
+    }
+
+    fun getVideoPathIdList(call: MethodCall, result: MethodChannel.Result?) {
+        threadPool.execute {
+            if (call.arguments()) {
+                result?.success(videoPathDirIdMap.keys.toList())
+                return@execute
+            }
+            videoPathDirIdMap.clear()
+            scanVideo()
+            scanThumb()
+            filterVideoPath()
+            result?.success(videoPathDirIdMap.keys.toList())
+        }
+    }
+
+    private fun createVideoPath(dirId: String, dir: String) {
+        if (videoPathDirIdMap.containsKey(dirId)) {
+            return
+        }
+
+        videoPathDirIdMap[dirId] = ArrayList()
+    }
+
+    private fun filterVideoPath() {
+
+        for (img in imgList) {
+            if (img.type == AssetType.Video) {
+                videoPathDirIdMap[img.dirId]?.add(img)
+            }
+        }
+    }
+
+
+    fun getImagePathIdList(call: MethodCall, result: MethodChannel.Result?) {
+        threadPool.execute {
+            if (call.arguments()) {
+                result?.success(imagePathDirIdMap.keys.toList())
+                return@execute
+            }
+            imagePathDirIdMap.clear()
+            scanImage()
+            scanThumb()
+            filterImagePath()
+            result?.success(imagePathDirIdMap.keys.toList())
+        }
+    }
+
+    private fun createImagePath(dirId: String, dir: String) {
+        if (imagePathDirIdMap.containsKey(dirId)) {
+            return
+        }
+
+        imagePathDirIdMap[dirId] = ArrayList()
+    }
+
+    private fun filterImagePath() {
+
+        for (img in imgList) {
+            if (img?.type == AssetType.Image) {
+                imagePathDirIdMap[img.dirId]?.add(img)
+            }
+        }
+    }
+
+    fun createAssetWithId(call: MethodCall, result: MethodChannel.Result?) {
+        val id = call.arguments as String
+        threadPool.execute {
+            val asset = createAsset(id)
+            result?.success(asset?.imgId)
+        }
+    }
+
+    private fun createAsset(path: String): Asset? {
+        run {
+            val mImageUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            val mContentResolver = registrar.activity().contentResolver
+
+            val where = "${MediaStore.Images.Media.DATA} = ?"
+
+            val mCursor = MediaStore.Images.Media.query(mContentResolver, mImageUri, storeImageKeys, where, arrayOf(path), MediaStore.Images.Media.DATE_TAKEN)
+            if (mCursor.count > 0) {
+                mCursor.moveToPosition(0)
+                handleImageCursor(mCursor)
+            }
+        }
+
+        run {
+            val mImageUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            val mContentResolver = registrar.activity().contentResolver
+
+            val where = "${MediaStore.Video.Media.DATA} = ?"
+
+            val mCursor = MediaStore.Images.Media.query(mContentResolver, mImageUri, storeVideoKeys, where, arrayOf(path), MediaStore.Images.Media.DATE_TAKEN)
+            if (mCursor.count > 0) {
+                mCursor.moveToPosition(0)
+                handleVideoCursor(mCursor)
+            }
+        }
+
+        return getImageWithId(path)
+    }
+
+    fun checkAssetExists(call: MethodCall, result: MethodChannel.Result) {
+        val id = call.arguments<String>()
+        val exists = File(id).exists()
+        result.success(exists)
+    }
+
 }
 
-class ImageCallBack(val imgList: List<Img>, val thumbHelper: ThumbHelper) : Callable<Boolean> {
+fun ImageScanner.getAllVideo(result: MethodChannel.Result) {
+    val list = ArrayList<String>()
+    for (entry in videoPathDirIdMap) {
+        for (asset in entry.value) {
+            list.add(asset.path)
+        }
+    }
+    result.success(list)
+}
+
+fun ImageScanner.getOnlyVideoWithPathId(call: MethodCall, result: MethodChannel.Result) {
+    val list = ArrayList<String>()
+    val id = call.arguments<String>()
+    videoPathDirIdMap[id]?.forEach { asset ->
+        list.add(asset.path)
+    }
+    result.success(list)
+}
+
+fun ImageScanner.getAllImage(result: MethodChannel.Result) {
+    val list = ArrayList<String>()
+    for (entry in imagePathDirIdMap) {
+        for (asset in entry.value) {
+            list.add(asset.path)
+        }
+    }
+    result.success(list)
+}
+
+
+fun ImageScanner.getOnlyImageWithPathId(call: MethodCall, result: MethodChannel.Result) {
+    val list = ArrayList<String>()
+    val id = call.arguments<String>()
+    imagePathDirIdMap[id]?.forEach { asset ->
+        list.add(asset.path)
+    }
+    result.success(list)
+}
+
+fun ImageScanner.getTimeStampWithIds(call: MethodCall, result: MethodChannel.Result) {
+    threadPool.execute {
+        val ids: List<String> = call.arguments()
+        val timeList = ArrayList<Long>()
+        for (id in ids) {
+            val asset = getImageWithId(id)
+            timeList.add(asset?.timeStamp ?: 0)
+        }
+
+        result.success(timeList)
+    }
+}
+
+class ImageCallBack(val assetList: List<Asset>, val thumbHelper: ThumbHelper) : Callable<Boolean> {
     override fun call(): Boolean {
-        imgList.forEachIndexed { index, img ->
+        assetList.forEachIndexed { index, img ->
             val thumb = thumbHelper.getThumb(img.path, img.imgId)
-            Log.i("image_thumb", "make thumb = $thumb ,progress = ${index + 1} / ${imgList.count()}")
+            Log.i("image_thumb", "make thumb = $thumb ,progress = ${index + 1} / ${assetList.count()}")
         }
         return true
     }

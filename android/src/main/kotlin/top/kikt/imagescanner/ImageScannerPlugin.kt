@@ -11,15 +11,20 @@ import io.flutter.plugin.common.PluginRegistry.Registrar
 
 class ImageScannerPlugin(val registrar: Registrar) : MethodCallHandler {
     companion object {
+        private val notifyChangeObserver = RefreshObserver()
+
         @JvmStatic
         fun registerWith(registrar: Registrar): Unit {
             val channel = MethodChannel(registrar.messenger(), "image_scanner")
             channel.setMethodCallHandler(ImageScannerPlugin(registrar))
+
+            notifyChangeObserver.initWith(registrar)
         }
     }
 
     val scanner = ImageScanner(registrar)
     private val permissionsUtils = PermissionsUtils()
+
 
     init {
         registrar.addRequestPermissionsResultListener { i, strings, ints ->
@@ -79,6 +84,43 @@ class ImageScannerPlugin(val registrar: Registrar) : MethodCallHandler {
                 scanner.getAssetTypeWithIds(call, result)
                 true
             }
+            call.method == "getDurationWithId" -> {
+                scanner.getAssetDurationWithId(call, result)
+                true
+            }
+            call.method == "getSizeWithId" -> {
+                scanner.getSizeWithId(call, result)
+                true
+            }
+            call.method == "releaseMemCache" -> {
+                scanner.releaseMemCache(result)
+                true
+            }
+            call.method == "getAllVideo" -> {
+                scanner.getAllVideo(result)
+                true
+            }
+            call.method == "getOnlyVideoWithPathId" -> {
+                scanner.getOnlyVideoWithPathId(call, result)
+                true
+            }
+            call.method == "getAllImage" -> {
+                scanner.getAllImage(result)
+                true
+            }
+            call.method == "getOnlyImageWithPathId" -> {
+                scanner.getOnlyImageWithPathId(call, result)
+                true
+            }
+            call.method == "getTimeStampWithIds" -> {
+                scanner.getTimeStampWithIds(call, result)
+                true
+            }
+            call.method == "assetExistsWithId" -> {
+                scanner.checkAssetExists(call, result)
+                true
+            }
+
             else -> false
         }
 
@@ -109,7 +151,11 @@ class ImageScannerPlugin(val registrar: Registrar) : MethodCallHandler {
                     r = null
                     when {
                         call.method == "requestPermission" -> localResult?.success(1)
-                        call.method == "getGalleryIdList" -> scanner.scanAndGetImageIdList(localResult)
+                        call.method == "getGalleryIdList" -> scanner.scanAndGetImageIdList(call, localResult)
+                        call.method == "getVideoPathList" -> scanner.getVideoPathIdList(call, localResult)
+                        call.method == "getImagePathList" -> scanner.getImagePathIdList(call, localResult)
+                        call.method == "createAssetWithId" -> scanner.createAssetWithId(call, localResult)
+                        else -> localResult?.notImplemented()
                     }
                 }
             }
@@ -120,7 +166,22 @@ class ImageScannerPlugin(val registrar: Registrar) : MethodCallHandler {
 
 }
 
-data class Img(val path: String, val imgId: String, val dir: String, val dirId: String, val title: String, var thumb: String?, val type: AssetType)
+data class Asset(val path: String, val imgId: String, val dir: String, val dirId: String, val title: String, var thumb: String?, val type: AssetType, val timeStamp: Long, val duration: Long?, val width: Int, val height: Int) {
+
+    override fun equals(other: Any?): Boolean {
+        if (other === this) {
+            return true
+        }
+        if (other !is Asset) return false
+
+        return this.imgId == other.imgId
+    }
+
+    override fun hashCode(): Int {
+        return imgId.hashCode()
+    }
+
+}
 
 enum class AssetType {
     Other,
